@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IoT Hydroponic Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/echarts@5.4.3/dist/echarts.min.js"></script>
+    <script src="https://unpkg.com/mqtt@4.3.7/dist/mqtt.min.js"></script>
+    <script src="https://unpkg.com/feather-icons"></script>
+    <style>
+        .neumorphic { border-radius: 20px; background: #e0e5ec; box-shadow: 9px 9px 16px rgb(163,177,198,0.6), -9px -9px 16px rgba(255,255,255, 0.5); }
+        .toggle-checkbox:checked { right: 0; background-color: #4ade80; }
+        .toggle-checkbox:checked + .toggle-label { background-color: #bbf7d0; }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen font-sans">
+    <div class="container mx-auto px-4 py-8">
+        <header class="mb-8 text-center">
+            <h1 class="text-4xl font-bold text-gray-800 mb-2">MONITORING AIR LINDI 💧</h1>
+            <p class="text-gray-600">Versi : Trial 1.1</p>
+            <div id="connection-status" class="inline-flex items-center mt-2 px-3 py-1 rounded-full text-sm font-medium bg-red-100 text-red-800">
+                <span class="w-2 h-2 mr-2 rounded-full bg-red-500"></span>
+                Disconnected
+            </div>
+        </header>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+            <div class="neumorphic p-6 rounded-xl">
+                <div class="flex items-center"><div class="p-3 rounded-full bg-blue-100 text-blue-600 mr-3"><i data-feather="thermometer"></i></div><h3 class="font-semibold text-gray-700">Temperature</h3></div>
+                <h2 id="temperature-value" class="text-3xl font-bold text-gray-800 mt-4">-- °C</h2>
+            </div>
+            <div class="neumorphic p-6 rounded-xl">
+                <div class="flex items-center"><div class="p-3 rounded-full bg-purple-100 text-purple-600 mr-3"><i data-feather="droplet"></i></div><h3 class="font-semibold text-gray-700">TDS</h3></div>
+                <h2 id="tds-value" class="text-3xl font-bold text-gray-800 mt-4">-- ppm</h2>
+            </div>
+            <div class="neumorphic p-6 rounded-xl">
+                <div class="flex items-center"><div class="p-3 rounded-full bg-green-100 text-green-600 mr-3"><i data-feather="activity"></i></div><h3 class="font-semibold text-gray-700">pH Level</h3></div>
+                <h2 id="ph-value" class="text-3xl font-bold text-gray-800 mt-4">--</h2>
+            </div>
+            <div class="neumorphic p-6 rounded-xl">
+                <div class="flex items-center"><div class="p-3 rounded-full bg-amber-100 text-amber-600 mr-3"><i data-feather="trending-up"></i></div><h3 class="font-semibold text-gray-700">Water Level</h3></div>
+                <h2 id="water-level-value" class="text-3xl font-bold text-gray-800 mt-4">-- %</h2>
+            </div>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+            <div class="neumorphic p-6 rounded-xl">
+                <div class="flex items-center justify-between mb-4">
+                    <div class="flex items-center"><div class="p-3 rounded-full bg-red-100 text-red-600 mr-3"><i data-feather="power"></i></div><h3 class="font-semibold text-gray-700">Water Pump</h3></div>
+                    <span id="pump-status" class="text-xs px-2 py-1 rounded-full bg-gray-100 text-gray-800">OFF</span>
+                </div>
+                <div class="flex items-center justify-between">
+                    <p class="text-gray-600">Control the water pump</p>
+                    <div class="relative inline-block w-12 mr-2 align-middle select-none">
+                        <input type="checkbox" id="pump-toggle" class="toggle-checkbox absolute block w-6 h-6 rounded-full bg-white border-4 appearance-none cursor-pointer"/>
+                        <label for="pump-toggle" class="toggle-label block overflow-hidden h-6 rounded-full bg-gray-300 cursor-pointer"></label>
+                    </div>
+                </div>
+            </div>
+            <div class="neumorphic p-6 rounded-xl">
+                <div class="flex items-center mb-4"><div class="p-3 rounded-full bg-blue-100 text-blue-600 mr-3"><i data-feather="info"></i></div><h3 class="font-semibold text-gray-700">System Information</h3></div>
+                <div class="space-y-2 text-sm">
+                    <div class="flex justify-between"><span class="text-gray-600">MQTT Broker</span><span id="broker-address" class="font-medium">--</span></div>
+                    <div class="flex justify-between"><span class="text-gray-600">Client ID</span><span id="client-id" class="font-medium">--</span></div>
+                    <div class="flex justify-between"><span class="text-gray-600">Last Update</span><span id="last-update" class="font-medium">--</span></div>
+                </div>
+            </div>
+        </div>
+
+        <div class="neumorphic p-6 rounded-xl mb-8">
+            <div class="flex items-center mb-4"><div class="p-3 rounded-full bg-purple-100 text-purple-600 mr-3"><i data-feather="bar-chart-2"></i></div><h3 class="font-semibold text-gray-700">Sensor Data History</h3></div>
+            <div id="history-chart" class="h-80"></div>
+        </div>
+    </div>
+
+    <script>
+        feather.replace();
+
+        // --- KONFIGURASI MQTT ANDA ---
+        const brokerURL = 'wss://81ec3e20d1064ccb8ba073d4cdd495b8.s1.eu.hivemq.cloud:8884/mqtt';
+        const clientId = 'hydroponic-dashboard-' + Math.random().toString(16).substr(2, 8);
+        const options = {
+            clean: true,
+            connectTimeout: 4000,
+            clientId: clientId,
+            username: 'testtt', // Username Anda
+            password: 'Testtt123', // Password Anda
+        }
+        
+        // --- TOPIK MQTT ANDA ---
+        const SENSOR_TOPIC = 'proyek/kolam/1/level'; // Topic untuk menerima data sensor
+        const PUMP_TOPIC = 'proyek/kolam/1/pompa';   // Topic untuk mengontrol pompa
+
+        // --- KONEKSI MQTT ---
+        document.getElementById('broker-address').textContent = new URL(brokerURL).hostname;
+        document.getElementById('client-id').textContent = clientId;
+        const client = mqtt.connect(brokerURL, options);
+
+        client.on('connect', () => {
+            console.log('Connected to MQTT broker');
+            const statusDiv = document.getElementById('connection-status');
+            statusDiv.className = 'inline-flex items-center mt-2 px-3 py-1 rounded-full text-sm font-medium bg-green-100 text-green-800';
+            statusDiv.innerHTML = '<span class="w-2 h-2 mr-2 rounded-full bg-green-500"></span> Connected';
+            
+            client.subscribe(SENSOR_TOPIC, (err) => { if (!err) console.log(`Subscribed to ${SENSOR_TOPIC}`); });
+            client.subscribe(PUMP_TOPIC, (err) => { if (!err) console.log(`Subscribed to ${PUMP_TOPIC}`); });
+        });
+
+        // Initialize Charts
+        const historyChart = echarts.init(document.getElementById('history-chart'));
+        let historyData = { times: [], temperature: [], tds: [], ph: [], waterLevel: [] };
+        
+        // Handle incoming messages
+        client.on('message', (topic, message) => {
+            const now = new Date();
+            const timeString = now.toLocaleTimeString();
+            document.getElementById('last-update').textContent = timeString;
+            
+            if (topic === SENSOR_TOPIC) {
+                try {
+                    const data = JSON.parse(message.toString());
+                    
+                    if (data.temperature !== undefined) document.getElementById('temperature-value').textContent = `${data.temperature.toFixed(1)} °C`;
+                    if (data.tds !== undefined) document.getElementById('tds-value').textContent = `${data.tds.toFixed(0)} ppm`;
+                    if (data.ph !== undefined) document.getElementById('ph-value').textContent = data.ph.toFixed(1);
+                    if (data.waterLevel !== undefined) document.getElementById('water-level-value').textContent = `${data.waterLevel.toFixed(0)} %`;
+
+                    // Update history chart data
+                    historyData.times.push(timeString);
+                    historyData.temperature.push(data.temperature);
+                    historyData.tds.push(data.tds);
+                    historyData.ph.push(data.ph);
+                    historyData.waterLevel.push(data.waterLevel);
+                    
+                    if (historyData.times.length > 20) {
+                        historyData.times.shift();
+                        historyData.temperature.shift();
+                        historyData.tds.shift();
+                        historyData.ph.shift();
+                        historyData.waterLevel.shift();
+                    }
+
+                    historyChart.setOption({
+                        xAxis: [{ data: historyData.times }],
+                        series: [
+                            { data: historyData.temperature },
+                            { data: historyData.tds },
+                            { data: historyData.ph },
+                            { data: historyData.waterLevel }
+                        ]
+                    });
+
+                } catch (e) { console.error('Error parsing sensor data:', e); }
+            } else if (topic === PUMP_TOPIC) {
+                const status = message.toString();
+                const pumpToggle = document.getElementById('pump-toggle');
+                const pumpStatus = document.getElementById('pump-status');
+                
+                if (status === 'ON') {
+                    pumpToggle.checked = true;
+                    pumpStatus.textContent = 'ON';
+                    pumpStatus.className = 'text-xs px-2 py-1 rounded-full bg-green-100 text-green-800';
+                } else {
+                    pumpToggle.checked = false;
+                    pumpStatus.textContent = 'OFF';
+                    pumpStatus.className = 'text-xs px-2 py-1 rounded-full bg-gray-100 text-gray-800';
+                }
+            }
+        });
+
+        // Pump control toggle
+        document.getElementById('pump-toggle').addEventListener('change', function() {
+            const command = this.checked ? 'ON' : 'OFF';
+            client.publish(PUMP_TOPIC, command);
+        });
+        
+        // Chart setup (simplified for brevity, full options can be added back if needed)
+        historyChart.setOption({
+            tooltip: { trigger: 'axis' },
+            legend: { data: ['Temperature', 'TDS', 'pH', 'Water Level'] },
+            grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
+            xAxis: [{ type: 'category', boundaryGap: false, data: [] }],
+            yAxis: [
+                { type: 'value', name: 'Temp (°C)', position: 'left' },
+                { type: 'value', name: 'TDS (ppm)', position: 'right'},
+                { type: 'value', name: 'pH', position: 'right', offset: 80 },
+                { type: 'value', name: 'Level (%)', position: 'left', offset: 80 }
+            ],
+            series: [
+                { name: 'Temperature', type: 'line', smooth: true, data: [] },
+                { name: 'TDS', type: 'line', yAxisIndex: 1, smooth: true, data: [] },
+                { name: 'pH', type: 'line', yAxisIndex: 2, smooth: true, data: [] },
+                { name: 'Water Level', type: 'line', yAxisIndex: 3, smooth: true, data: [] }
+            ]
+        });
+
+    </script>
+</body>
+</html>
